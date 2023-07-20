@@ -5,6 +5,7 @@ import os
 import hashlib
 import re
 import sys
+import gzip
 from pathlib import Path
 
 
@@ -57,35 +58,36 @@ def dist_attrs(dist_dir):
 
 
 def pkg_attrs(pkg_desc_path):
-    with open(pkg_desc_path, "rt") as f:
-        attrs = {}
-        last_key = None
-        for line in f.readlines():
-            line = line.rstrip('\n')
-            if len(line.strip()) == 0:
-                yield attrs
-                attrs = {}
-                last_key = None
-            elif line.startswith(" "):  # last line continue
-                if last_key is None:
-                    raise ValueError
-                attrs[last_key] += line
-            else:
-                sep_index = line.find(":")
-                if sep_index < 0:
-                    raise ValueError
-                last_key = line[:sep_index]
-                attrs[last_key] = line[sep_index + 2:]  # skip : and a space
+    # with open(pkg_desc_path, "rt") as f:
+    f = gzip.open(pkg_desc_path)
+    attrs = {}
+    last_key = None
+    for line in f.readlines():
+        # print(type(line.decode()))
+        line = line.decode().rstrip('\n')
+        if len(line.strip()) == 0:
+            yield attrs
+            attrs = {}
+            last_key = None
+        elif line.startswith(" "):  # last line continue
+            if last_key is None:
+                raise ValueError
+            attrs[last_key] += line
+        else:
+            sep_index = line.find(":")
+            if sep_index < 0:
+                raise ValueError
+            last_key = line[:sep_index]
+            attrs[last_key] = line[sep_index + 2:]  # skip : and a space
 
 
 def pool_attrs(dist_dir, pool_dir):
     """ Parse attributes in Packages file"""
     attrs = {}
     pool_parent_dir = os.path.dirname(pool_dir)
-
     for root, _, files in os.walk(dist_dir):
         for filename in files:
-            if filename != "Packages":
+            if filename != "Packages.gz":
                 continue
             for pkgattr in pkg_attrs(os.path.join(root, filename)):
                 name = pkgattr["Filename"]
@@ -98,6 +100,7 @@ def pool_attrs(dist_dir, pool_dir):
                     attr.sh256sum = pkgattr.get("SHA256", "")
 
                     attrs[path] = attr
+    print('packages', len(attrs))
     return attrs
 
 
@@ -132,11 +135,15 @@ def is_checksum_correct(filepath, attr):
     return True
 
 
-def bad_files_in_dir(dirpath, attrs):
+def bad_files_in_dir(dirpath, attrs, strict=False):
     for root, _, files in os.walk(dirpath):
         for filename in files:
             filepath = os.path.join(root, filename)
+            if strict:
+                print(filepath)
+                assert filepath in attrs
             if filepath in attrs:
+                # print(attrs[filepath].sh256sum)
                 if not is_checksum_correct(filepath, attrs[filepath]):
                     yield filepath
 
@@ -151,7 +158,7 @@ def bad_files_in_mirror(mirror_dir):
 
     for dist_dir in dist_dirs:
         click.echo("checking %s ..." % dist_dir)
-        yield from bad_files_in_dir(dist_dir, dist_attrs(dist_dir))
+        yield from bad_files_in_dir(dist_dir, dist_attrs(dist_dir), False)
         yield from bad_files_in_dir(pool_dir, pool_attrs(dist_dir, pool_dir))
 
 
